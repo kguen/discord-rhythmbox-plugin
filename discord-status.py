@@ -1,5 +1,5 @@
 import time
-import os
+import os, subprocess
 import json
 import gi
 gi.require_version('Notify', '0.7')
@@ -21,7 +21,8 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
         
         with open(settings_path) as settings_file:
             self.settings = json.load(settings_file)
-        
+
+        self.version = subprocess.run(['rhythmbox', '--version'], stdout=subprocess.PIPE).stdout.decode('utf-8').capitalize()
         self.notify_available = False
         self.connected = False
         self.streaming = False
@@ -54,8 +55,6 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
         self.playing_state_changed_id = sp.connect('playing-changed', self.on_playing_state_changed)
         self.elapsed_changed_id       = sp.connect('elapsed-changed', self.on_elapsed_changed)
         self.playing_changed_id       = sp.connect('playing-song-property-changed', self.on_playing_song_property_changed)
-        
-        self.rpc.update(state="Playback Stopped", details="Rhythmbox Status Plugin", large_image="rhythmbox", small_image="stop", small_text="Stopped")
 
     def do_deactivate(self):
         sp = self.object.props.shell_player
@@ -77,6 +76,8 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
                 "album": "Unknown",
                 "title": "Unknown",
                 "artist": "Unknown",
+                "genre": "Unknown",
+                "year": 0,
                 "duration": 0
             }
 
@@ -84,6 +85,8 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
         title = playing_entry.get_string(RB.RhythmDBPropType.TITLE)
         artist = playing_entry.get_string(RB.RhythmDBPropType.ARTIST)
         duration = playing_entry.get_ulong(RB.RhythmDBPropType.DURATION)
+        genre = playing_entry.get_string(RB.RhythmDBPropType.GENRE)
+        year = playing_entry.get_ulong(RB.RhythmDBPropType.YEAR)
 
         # If there is anything with less than 2 characters, Discord won't show our presence
         # So, lets add a cool empty unicode character to the end
@@ -93,12 +96,16 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
             title = f"{title}​"
         if artist and len(artist) < 2:
             artist = f"{artist}​"
+        if genre and len(genre) < 2:
+            genre = f"{genre}​"
 
-        print(f"discord_status: album={album} artist={artist} title={title} len_al={len(album)} len_art={len(artist)} len_title={len(title)}")
+        print(f"discord_status: album={album} artist={artist} title={title} genre={genre} year={year}")
         return {
             "album": album or "Unknown",
             "title": title or "Unknown",
             "artist": artist or "Unknown",
+            "genre": genre or "Unknown",
+            "year": year or 0,
             "duration": duration or 0
         }
 
@@ -106,40 +113,41 @@ class DiscordStatus(GObject.Object, Peas.Activatable):
         if not playing and not sp.get_playing_entry():
             self.playing = False
 
-            self.rpc.update(
-                state="Playback Stopped",
-                details="Rhythmbox Status Plugin",
-                large_image="rhythmbox",
-                small_image="stop",
-                small_text="Stopped"
-            )
+            self.rpc.clear()
         else:
             song_info = self.get_current_song_info(sp)
+            title = song_info["title"]
 
             if self.streaming or self.stream_flag:
                 self.rpc.update(
-                    state=song_info["title"][0:127],
-                    details="Stream",
+                    state="Radio stream",
+                    details=title[0:127],
                     large_image="rhythmbox",
+                    large_text=self.version,
                     small_image="play",
                     small_text="Streaming",
                     start=int(time.time())
                 )
-                
                 return
 
             self.playing = playing
-            title = song_info["title"]
+
             artist = song_info["artist"]
-            details = f"{title} - {artist}"
+            album = song_info["album"]
+            genre = song_info["genre"]
+            year = song_info["year"]
             pos = sp.get_playing_time().time
+            
+            details = f"{artist} - {title}"
+            state = f'From "{album}" ({year}) | {genre}' if album != "Unknown" else f"{year} | {genre}"
             start_time = int(time.time()) if self.settings["time_style"] == 1 else int(time.time()) - pos
             end_time = (start_time + song_info["duration"] - pos) if self.settings["time_style"] == 1 else None
 
             self.rpc.update(
-                state=song_info["album"][0:127],
+                state=state[0:127],
                 details=details[0:127],
                 large_image="rhythmbox",
+                large_text=self.version,
                 small_image="play" if playing else "pause",
                 small_text="Playing" if playing else "Paused",
                 start=start_time if playing else None,
